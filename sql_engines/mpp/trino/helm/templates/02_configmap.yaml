@@ -1,0 +1,50 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Values.componentNames.coordinatorConfigMap }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "trino.coordinatorLabels" . | nindent 4 }}
+data:
+  node.properties.template: |
+{{ .Values.config.coordinator.nodeProperties | indent 4 }}
+  jvm.config.template: |
+{{ .Values.config.coordinator.jvmConfig | indent 4 }}
+  config.properties.template: |
+{{ .Values.config.coordinator.configProperties | indent 4 }}
+  log.properties.template: |
+{{ .Values.config.coordinator.logProperties | indent 4 }}
+  password-authenticator.properties.template: |
+{{ .Values.config.coordinator.passwordAuthenticator | indent 4 }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Values.componentNames.workerConfigMap }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "trino.workerLabels" . | nindent 4 }}
+data:
+  node.properties.template: |
+{{ .Values.config.worker.nodeProperties | indent 4 }}
+  jvm.config.template: |
+{{ .Values.config.worker.jvmConfig | indent 4 }}
+  config.properties.template: |
+{{ .Values.config.worker.configProperties | indent 4 }}
+  log.properties.template: |
+{{ .Values.config.worker.logProperties | indent 4 }}
+  password-authenticator.properties.template: |
+{{ .Values.config.worker.passwordAuthenticator | indent 4 }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Values.componentNames.catalogConfigMap }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "trino.labels" . | nindent 4 }}
+data:
+{{- range $name, $body := .Values.catalogs }}
+  {{ $name }}.properties: |
+{{ $body | indent 4 }}
+{{- end }}

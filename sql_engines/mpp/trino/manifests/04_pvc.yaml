@@ -1,0 +1,31 @@
+# Coordinator 는 Deployment 이므로 PVC 를 별도 정의.
+# Worker 는 StatefulSet 이므로 06_worker.yaml 의 volumeClaimTemplates 사용.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: trino-coordinator-data-volume
+  namespace: __NAMESPACE__
+  labels:
+    app: trino-coordinator
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: block-sc-delete
+  resources:
+    requests:
+      storage: 10Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: trino-coordinator-heapdump-volume
+  namespace: __NAMESPACE__
+  labels:
+    app: trino-coordinator
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: block-sc-delete
+  resources:
+    requests:
+      storage: 10Gi

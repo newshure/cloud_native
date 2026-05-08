@@ -1,0 +1,337 @@
+# =============================================================================
+# trino Helm chart values
+# -----------------------------------------------------------------------------
+# 기본값은 sql_engines/mpp/trino/manifests/ 의 raw 매니페스트와 동일한 결과를
+# 만들도록 맞춰져 있습니다. 즉
+#   `helm install trino ./helm -n databases`
+#   `./scripts/deploy.sh apply databases`
+# 두 결과가 동등합니다.
+# =============================================================================
+
+nameOverride: ""
+fullnameOverride: ""
+
+# raw 매니페스트와 동일한 리소스 이름을 보장하기 위한 명시적 컴포넌트 이름.
+componentNames:
+  coordinatorName: trino-coordinator
+  workerName: trino-worker
+  coordinatorService: trino-coordinator-service
+  workerService: trino-worker-service
+  coordinatorConfigMap: trino-coordinator-configmap
+  workerConfigMap: trino-worker-configmap
+  catalogConfigMap: trino-catalog-configmap
+  certSecret: trino-cert-secret
+  passwordDbSecret: trino-password-db-secret
+  coordinatorDataPvc: trino-coordinator-data-volume
+  coordinatorHeapdumpPvc: trino-coordinator-heapdump-volume
+  ingress: trino
+  hpa: trino-scaler
+
+# -----------------------------------------------------------------------------
+# image
+# -----------------------------------------------------------------------------
+image:
+  repository: harbor.nova.office/library/databases/trino
+  tag: latest
+  pullPolicy: Always
+  initPullPolicy: IfNotPresent
+  pullSecrets: []
+    # - name: harbor-pull-secret
+
+# -----------------------------------------------------------------------------
+# coordinator (Deployment)
+# -----------------------------------------------------------------------------
+coordinator:
+  replicas: 1
+  strategy:
+    type: Recreate
+  terminationGracePeriodSeconds: 60
+  resources:
+    requests:
+      cpu: "2"
+      memory: "8Gi"
+    limits:
+      cpu: "4"
+      memory: "12Gi"
+  env:
+    PRODUCT: production
+    METRICS_USER: prometheus
+    # discovery.uri 는 templates 에서 namespace 인지 후 자동 구성
+  preStopSleepSec: 30
+
+# -----------------------------------------------------------------------------
+# worker (StatefulSet)
+# -----------------------------------------------------------------------------
+worker:
+  replicas: 3
+  serviceName: trino-worker-service
+  terminationGracePeriodSeconds: 180
+  resources:
+    requests:
+      cpu: "8"
+      memory: "16Gi"
+    limits:
+      cpu: "10"
+      memory: "28Gi"
+  env:
+    PRODUCT: production
+    METRICS_USER: prometheus
+  preStopSleepSec: 120
+
+# -----------------------------------------------------------------------------
+# 컨테이너 보안 컨텍스트
+# -----------------------------------------------------------------------------
+podSecurityContext:
+  runAsUser: 1000
+  runAsGroup: 1000
+  fsGroup: 1000
+
+containerSecurityContext:
+  runAsUser: 1000
+  runAsGroup: 1000
+  allowPrivilegeEscalation: false
+
+# init-container 는 PVC chown 등을 위해 privileged 필요
+initContainerSecurityContext:
+  privileged: true
+
+# -----------------------------------------------------------------------------
+# Probes — coordinator/worker 공통
+# -----------------------------------------------------------------------------
+probes:
+  startup:
+    initialDelaySeconds: 30
+    periodSeconds: 10
+    failureThreshold: 30
+    timeoutSeconds: 5
+  liveness:
+    periodSeconds: 15
+    failureThreshold: 5
+    timeoutSeconds: 5
+    successThreshold: 1
+  readiness:
+    periodSeconds: 10
+    failureThreshold: 3
+    timeoutSeconds: 5
+    successThreshold: 1
+
+# -----------------------------------------------------------------------------
+# 영속 스토리지
+# -----------------------------------------------------------------------------
+persistence:
+  storageClass: block-sc-delete
+  accessModes:
+    - ReadWriteOnce
+  coordinator:
+    data:
+      size: 10Gi
+    heapdump:
+      size: 10Gi
+  worker:
+    data:
+      size: 10Gi
+    heapdump:
+      size: 60Gi
+    spill:
+      size: 200Gi
+
+# -----------------------------------------------------------------------------
+# Service
+# -----------------------------------------------------------------------------
+service:
+  coordinator:
+    type: ClusterIP
+    httpPort: 8080
+    httpsPort: 8443
+  worker:
+    type: ClusterIP
+    httpPort: 8080
+    httpsPort: 8443
+
+# -----------------------------------------------------------------------------
+# Ingress (NGINX, HTTPS termination)
+# -----------------------------------------------------------------------------
+ingress:
+  enabled: true
+  className: nginx
+  host: trino.ai.nova.office
+  backendPort: 8443
+  tls:
+    enabled: true
+    secretName: trino-cert-secret
+  annotations:
+    nginx.ingress.kubernetes.io/backend-protocol: "HTTPS"
+    nginx.ingress.kubernetes.io/proxy-ssl-verify: "off"
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/proxy-connect-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-buffer-size: "128k"
+    nginx.ingress.kubernetes.io/proxy-body-size: "256m"
+
+# -----------------------------------------------------------------------------
+# HPA — worker 만 대상
+# -----------------------------------------------------------------------------
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 10
+  cpuTargetUtilization: 80
+  memoryTargetUtilization: 80
+
+# -----------------------------------------------------------------------------
+# Catalogs — placeholder 그대로 유지. 실 배포 시 secrets-plugin 또는 ESO 권장.
+# 키는 catalog 파일명으로 그대로 매핑됩니다 (.properties 확장자는 자동 부여).
+# -----------------------------------------------------------------------------
+catalogs:
+  postgresql_0: |
+    connector.name=postgresql
+    connection-url=jdbc:postgresql://postgresql-service.databases:5432/trino
+    connection-user=trino
+    connection-password=${TRINO_DB_PASSWORD_TRINO}
+    decimal-default-scale=10
+    decimal-rounding-mode=HALF_UP
+  postgresql_0_airflow: |
+    connector.name=postgresql
+    connection-url=jdbc:postgresql://postgresql-service.databases:5432/airflow
+    connection-user=airflow
+    connection-password=${TRINO_DB_PASSWORD_AIRFLOW}
+    decimal-default-scale=10
+    decimal-rounding-mode=HALF_UP
+
+# -----------------------------------------------------------------------------
+# Trino etc/* 템플릿 (coordinator/worker 별도 파일)
+# 컨테이너 진입 스크립트가 envsubst 로 ${...} 치환 후 etc/ 로 렌더링.
+# -----------------------------------------------------------------------------
+config:
+  coordinator:
+    nodeProperties: |
+      node.environment=production
+      node.data-dir=${TRINO_HOME}/data
+      plugin.dir=${TRINO_HOME}/plugin
+      node.launcher-log-file=${TRINO_LAUNCHER_LOG}
+      node.server-log-file=${TRINO_SERVER_LOG}
+    jvmConfig: |
+      -server
+      -XX:InitialRAMPercentage=${JAVA_INITIAL_RAM_PERCENTAGE}
+      -XX:MaxRAMPercentage=${JAVA_MAX_RAM_PERCENTAGE}
+      -XX:+UseContainerSupport
+      -XX:+UseG1GC
+      -XX:G1HeapRegionSize=${JAVA_G1_HEAP_REGION_SIZE}
+      -XX:ReservedCodeCacheSize=${RESERVED_CODE_CACHE_SIZE}
+      -XX:+ExplicitGCInvokesConcurrent
+      -XX:+HeapDumpOnOutOfMemoryError
+      -XX:HeapDumpPath=${TRINO_HEAPDUMP_PATH}
+      -XX:+ExitOnOutOfMemoryError
+      -XX:-OmitStackTraceInFastThrow
+      -XX:PerMethodRecompilationCutoff=10000
+      -XX:PerBytecodeRecompilationCutoff=10000
+      -Djdk.attach.allowAttachSelf=true
+      -Djdk.nio.maxCachedBufferSize=2000000
+      -XX:OnOutOfMemoryError="kill -9 %p"
+      -Dfile.encoding=UTF-8
+      -Duser.timezone=Asia/Seoul
+    configProperties: |
+      coordinator=${COORDINATOR_ENABLED}
+      node-scheduler.include-coordinator=${WORKER_ENABLED}
+      query.max-total-memory=${QUERY_TOTAL_MEMORY}
+      query.max-memory=${QUERY_MAX_MEMORY}
+
+      http-server.http.port=${TRINO_SERVER_HTTP_PORT}
+      http-server.https.enabled=true
+      http-server.https.port=${TRINO_SERVER_HTTPS_PORT}
+      http-server.https.keystore.path=${TRINO_HTTPS_SERVER_CERT_PATH}
+      http-server.authentication.type=${TRINO_SERVER_AUTH_TYPE}
+      spill-enabled=${SPILL_ENABLED}
+
+      discovery.uri=${TRINO_SERVER_DISCOVERY_URI}
+      internal-communication.https.required=false
+      internal-communication.shared-secret=${TRINO_INTERNAL_SHARED_SECRET}
+      http-server.authentication.allow-insecure-over-http=true
+      http-server.process-forwarded=true
+    logProperties: |
+      io.trino=INFO
+    passwordAuthenticator: |
+      password-authenticator.name=file
+      file.password-file=/opt/trino/etc/password.db
+  worker:
+    nodeProperties: |
+      node.environment=production
+      node.data-dir=${TRINO_HOME}/data
+      plugin.dir=${TRINO_HOME}/plugin
+      node.launcher-log-file=${TRINO_LAUNCHER_LOG}
+      node.server-log-file=${TRINO_SERVER_LOG}
+    jvmConfig: |
+      -server
+      -XX:InitialRAMPercentage=${JAVA_INITIAL_RAM_PERCENTAGE}
+      -XX:MaxRAMPercentage=${JAVA_MAX_RAM_PERCENTAGE}
+      -XX:+UseContainerSupport
+      -XX:+UseG1GC
+      -XX:G1HeapRegionSize=${JAVA_G1_HEAP_REGION_SIZE}
+      -XX:ReservedCodeCacheSize=${RESERVED_CODE_CACHE_SIZE}
+      -XX:+ExplicitGCInvokesConcurrent
+      -XX:+HeapDumpOnOutOfMemoryError
+      -XX:HeapDumpPath=${TRINO_HEAPDUMP_PATH}
+      -XX:+ExitOnOutOfMemoryError
+      -XX:-OmitStackTraceInFastThrow
+      -XX:PerMethodRecompilationCutoff=10000
+      -XX:PerBytecodeRecompilationCutoff=10000
+      -Djdk.attach.allowAttachSelf=true
+      -Djdk.nio.maxCachedBufferSize=2000000
+      -XX:OnOutOfMemoryError="kill -9 %p"
+      -Dfile.encoding=UTF-8
+      -Duser.timezone=Asia/Seoul
+    configProperties: |
+      coordinator=${COORDINATOR_ENABLED}
+      node-scheduler.include-coordinator=${WORKER_ENABLED}
+      query.max-memory-per-node=${QUERY_MAX_MEMORY_PER_NODE}
+      memory.heap-headroom-per-node=${MEMORY_HEAP_HEADROOM_PER_NODE}
+
+      http-server.http.port=${TRINO_SERVER_HTTP_PORT}
+      http-server.https.enabled=true
+      http-server.https.port=${TRINO_SERVER_HTTPS_PORT}
+      http-server.https.keystore.path=${TRINO_HTTPS_SERVER_CERT_PATH}
+      http-server.authentication.type=${TRINO_SERVER_AUTH_TYPE}
+      spill-enabled=${SPILL_ENABLED}
+
+      discovery.uri=${TRINO_SERVER_DISCOVERY_URI}
+      internal-communication.https.required=false
+      internal-communication.shared-secret=${TRINO_INTERNAL_SHARED_SECRET}
+      http-server.authentication.allow-insecure-over-http=true
+      http-server.process-forwarded=true
+    logProperties: |
+      io.trino=INFO
+    passwordAuthenticator: |
+      password-authenticator.name=file
+      file.password-file=/opt/trino/etc/password.db
+
+# -----------------------------------------------------------------------------
+# Secret 본문 (placeholder).
+# 실값은 helm install --set-file 또는 별도 Sealed-Secret/ESO 로 주입 권장.
+# -----------------------------------------------------------------------------
+secrets:
+  certPem: |
+       ${TLS_SERVER_PEM}
+  passwordDb: |
+       admin:${BCRYPT_HASH_ADMIN}
+       haedong:${BCRYPT_HASH_HAEDONG}
+       trino:${BCRYPT_HASH_TRINO}
+       prometheus:${BCRYPT_HASH_PROMETHEUS}
+       cloudbeaver:${BCRYPT_HASH_CLOUDBEAVER}
+       coxspace:${BCRYPT_HASH_COXSPACE}
+
+# -----------------------------------------------------------------------------
+# 라벨/어노테이션 추가 (옵션)
+# -----------------------------------------------------------------------------
+commonLabels: {}
+commonAnnotations: {}
+podLabels: {}
+podAnnotations: {}
+
+# -----------------------------------------------------------------------------
+# 노드 배치 (옵션)
+# -----------------------------------------------------------------------------
+nodeSelector: {}
+tolerations: []
+affinity: {}

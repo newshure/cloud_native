@@ -1,0 +1,19 @@
+# Patterns to ignore when packaging the Helm chart.
+.DS_Store
+.git/
+.gitignore
+.gitattributes
+.idea/
+.vscode/
+*.tmproj
+*.swp
+*.bak
+*.tgz
+.project
+*.tmp
+*~
+# Test artifacts
+ci/
+tests/
+# Local dev
+rendered/

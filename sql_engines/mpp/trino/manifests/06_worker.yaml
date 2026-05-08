@@ -1,0 +1,175 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: trino-worker
+  namespace: __NAMESPACE__
+  labels:
+    app: trino-worker
+spec:
+  replicas: 3
+  serviceName: trino-worker-service
+  selector:
+    matchLabels:
+      app: trino-worker
+  template:
+    metadata:
+      labels:
+        app: trino-worker
+    spec:
+      securityContext:
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+      terminationGracePeriodSeconds: 180
+      initContainers:
+        - name: trino-initiator
+          image: harbor.nova.office/library/databases/trino:latest
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/bash", "-c", "/opt/trino/bin/init-container.sh"]
+          securityContext:
+            privileged: true
+      containers:
+        - name: trino-worker
+          image: harbor.nova.office/library/databases/trino:latest
+          imagePullPolicy: Always
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+            - name: https
+              containerPort: 8443
+              protocol: TCP
+          resources:
+            requests:
+              cpu: "8"
+              memory: "16Gi"
+            limits:
+              cpu: "10"
+              memory: "28Gi"
+          env:
+            - name: PRODUCT
+              value: "production"
+            - name: COORDINATOR_ENABLED
+              value: "false"
+            - name: WORKER_ENABLED
+              value: "true"
+            - name: TRINO_SERVER_DISCOVERY_URI
+              value: "http://trino-coordinator-service.__NAMESPACE__:8080"
+            - name: METRICS_USER
+              value: "prometheus"
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+          workingDir: /opt/trino
+          command: ["/bin/bash", "-c", "/opt/trino/bin/worker-container.sh"]
+          startupProbe:
+            httpGet:
+              path: /v1/info
+              port: 8080
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            failureThreshold: 30
+            timeoutSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /v1/status
+              port: 8080
+            periodSeconds: 15
+            failureThreshold: 5
+            timeoutSeconds: 5
+            successThreshold: 1
+          readinessProbe:
+            httpGet:
+              path: /v1/info/state
+              port: 8080
+            periodSeconds: 10
+            failureThreshold: 3
+            timeoutSeconds: 5
+            successThreshold: 1
+          lifecycle:
+            preStop:
+              exec:
+                command:
+                  - /bin/sh
+                  - -c
+                  - |
+                    curl -s -X PUT \
+                      -d '"SHUTTING_DOWN"' \
+                      -H 'Content-type: application/json' \
+                      -H 'X-Trino-User: admin' \
+                      http://localhost:8080/v1/info/state
+                    sleep 120
+          volumeMounts:
+            - name: trino-worker-configmap
+              mountPath: /opt/trino/etc/templates
+              readOnly: true
+            - name: trino-catalog-configmap
+              mountPath: /opt/trino/etc/catalog
+              readOnly: true
+            - name: trino-cert-secret
+              mountPath: /opt/trino/etc/certs
+              readOnly: true
+            - name: trino-password-db-secret
+              mountPath: /opt/trino/etc/password.db
+              subPath: password.db
+              readOnly: true
+            - name: trino-worker-data-volume
+              mountPath: /opt/trino/data
+            - name: trino-worker-heapdump-volume
+              mountPath: /opt/trino/dump
+            - name: trino-worker-spill-volume
+              mountPath: /opt/trino/spill
+      volumes:
+        - name: trino-worker-configmap
+          configMap:
+            name: trino-worker-configmap
+        - name: trino-catalog-configmap
+          configMap:
+            name: trino-catalog-configmap
+        - name: trino-cert-secret
+          secret:
+            secretName: trino-cert-secret
+        - name: trino-password-db-secret
+          secret:
+            secretName: trino-password-db-secret
+  volumeClaimTemplates:
+    - metadata:
+        name: trino-worker-data-volume
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        storageClassName: block-sc-delete
+        resources:
+          requests:
+            storage: 10Gi
+    - metadata:
+        name: trino-worker-heapdump-volume
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        storageClassName: block-sc-delete
+        resources:
+          requests:
+            storage: 60Gi
+    - metadata:
+        name: trino-worker-spill-volume
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        storageClassName: block-sc-delete
+        resources:
+          requests:
+            storage: 200Gi
