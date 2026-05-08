@@ -1,0 +1,203 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "postgresql-ha.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "postgresql-ha.labels" . | nindent 4 }}
+spec:
+  serviceName: {{ include "postgresql-ha.headlessServiceName" . }}
+  replicas: {{ .Values.replicaCount }}
+  podManagementPolicy: {{ .Values.podManagementPolicy }}
+  updateStrategy:
+    type: {{ .Values.updateStrategy.type }}
+    {{- if eq .Values.updateStrategy.type "RollingUpdate" }}
+    rollingUpdate:
+      maxUnavailable: {{ .Values.updateStrategy.rollingUpdate.maxUnavailable }}
+      partition: {{ .Values.updateStrategy.rollingUpdate.partition }}
+    {{- end }}
+  persistentVolumeClaimRetentionPolicy:
+    whenDeleted: {{ .Values.persistentVolumeClaimRetentionPolicy.whenDeleted }}
+    whenScaled:  {{ .Values.persistentVolumeClaimRetentionPolicy.whenScaled }}
+  selector:
+    matchLabels:
+      {{- include "postgresql-ha.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "postgresql-ha.selectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ include "postgresql-ha.serviceAccountName" . }}
+      automountServiceAccountToken: {{ .Values.serviceAccount.automountToken }}
+      shareProcessNamespace: {{ .Values.shareProcessNamespace }}
+      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
+      {{- with .Values.image.pullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      affinity:
+        {{- include "postgresql-ha.affinity" . | nindent 8 }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+
+      initContainers:
+        - name: init-check-dir
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            runAsUser: {{ .Values.initCheckDir.runAsUser }}
+            allowPrivilegeEscalation: {{ .Values.initCheckDir.allowPrivilegeEscalation }}
+          command:
+            - /bin/bash
+            - -c
+            - |
+              set -e
+              mkdir -p {{ .Values.postgresql.dataDir }} {{ .Values.postgresql.backupDir }}
+              chown -R {{ .Values.containerSecurityContext.runAsUser }}:{{ .Values.containerSecurityContext.runAsGroup }} {{ .Values.postgresql.dataDir }} {{ .Values.postgresql.backupDir }}
+              chmod 700 {{ .Values.postgresql.dataDir }}
+              chmod 755 {{ .Values.postgresql.backupDir }}
+          volumeMounts:
+            - name: data
+              mountPath: {{ .Values.postgresql.dataDir }}
+            - name: backup
+              mountPath: {{ .Values.postgresql.backupDir }}
+
+        - name: init-ha-bootstrap
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          command: ["/bin/bash", "{{ .Values.postgresql.binDir }}/init-ha-bootstrap.sh"]
+          env:
+            {{- include "postgresql-ha.commonEnv" . | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: {{ .Values.postgresql.dataDir }}
+            - name: socket
+              mountPath: {{ .Values.postgresql.socketDir }}
+            - name: pglog
+              mountPath: {{ .Values.postgresql.logDir }}
+            - name: config
+              mountPath: {{ .Values.postgresql.confDir }}/postgresql.conf
+              subPath: postgresql.conf
+              readOnly: true
+            - name: config
+              mountPath: {{ .Values.postgresql.confDir }}/pg_hba.conf
+              subPath: pg_hba.conf
+              readOnly: true
+            - name: config
+              mountPath: {{ .Values.postgresql.confDir }}/pg_ident.conf
+              subPath: pg_ident.conf
+              readOnly: true
+
+      containers:
+        - name: postgresql
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          ports:
+            - name: postgres
+              containerPort: {{ .Values.postgresql.port }}
+          command: ["/bin/bash", "{{ .Values.postgresql.binDir }}/entrypoint.sh"]
+          env:
+            {{- include "postgresql-ha.commonEnv" . | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: {{ .Values.postgresql.dataDir }}
+            - name: socket
+              mountPath: {{ .Values.postgresql.socketDir }}
+            - name: pglog
+              mountPath: {{ .Values.postgresql.logDir }}
+          readinessProbe:
+            exec:
+              command: ["/bin/bash", "{{ .Values.postgresql.binDir }}/readiness.sh"]
+            initialDelaySeconds: {{ .Values.probes.readiness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.probes.readiness.periodSeconds }}
+            timeoutSeconds: {{ .Values.probes.readiness.timeoutSeconds }}
+            failureThreshold: {{ .Values.probes.readiness.failureThreshold }}
+          livenessProbe:
+            exec:
+              command: ["/bin/bash", "{{ .Values.postgresql.binDir }}/liveness.sh"]
+            initialDelaySeconds: {{ .Values.probes.liveness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.probes.liveness.periodSeconds }}
+            timeoutSeconds: {{ .Values.probes.liveness.timeoutSeconds }}
+            failureThreshold: {{ .Values.probes.liveness.failureThreshold }}
+          lifecycle:
+            preStop:
+              exec:
+                command: ["/bin/bash", "{{ .Values.postgresql.binDir }}/prestop.sh"]
+          resources:
+            {{- toYaml .Values.resources.postgresql | nindent 12 }}
+
+        - name: role-manager
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          command: ["/bin/bash", "{{ .Values.postgresql.binDir }}/role-manager.sh"]
+          env:
+            {{- include "postgresql-ha.commonEnv" . | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: {{ .Values.postgresql.dataDir }}
+            - name: socket
+              mountPath: {{ .Values.postgresql.socketDir }}
+          resources:
+            {{- toYaml .Values.resources.roleManager | nindent 12 }}
+
+        - name: backup-cron
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          command: ["/bin/bash", "-c", "{{ .Values.postgresql.binDir }}/backup-cron.sh"]
+          env:
+            {{- include "postgresql-ha.commonEnv" . | nindent 12 }}
+          volumeMounts:
+            - name: socket
+              mountPath: {{ .Values.postgresql.socketDir }}
+            - name: backup
+              mountPath: {{ .Values.postgresql.backupDir }}
+          resources:
+            {{- toYaml .Values.resources.backupCron | nindent 12 }}
+
+      volumes:
+        - name: pglog
+          emptyDir: {}
+        - name: socket
+          emptyDir: {}
+        - name: config
+          configMap:
+            name: {{ include "postgresql-ha.configMapName" . }}
+        - name: backup
+          persistentVolumeClaim:
+            claimName: {{ include "postgresql-ha.backupPvcName" . }}
+
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes:
+          {{- range .Values.persistence.data.accessModes }}
+          - {{ . | quote }}
+          {{- end }}
+        storageClassName: {{ .Values.persistence.data.storageClass | quote }}
+        resources:
+          requests:
+            storage: {{ .Values.persistence.data.size | quote }}

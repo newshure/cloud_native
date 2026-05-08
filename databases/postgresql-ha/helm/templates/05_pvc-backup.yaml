@@ -1,0 +1,20 @@
+{{- if and .Values.persistence.backup.enabled (not .Values.persistence.backup.existingClaim) -}}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "postgresql-ha.backupPvcName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "postgresql-ha.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/resource-policy: keep
+spec:
+  accessModes:
+    {{- range .Values.persistence.backup.accessModes }}
+    - {{ . | quote }}
+    {{- end }}
+  storageClassName: {{ .Values.persistence.backup.storageClass | quote }}
+  resources:
+    requests:
+      storage: {{ .Values.persistence.backup.size | quote }}
+{{- end }}

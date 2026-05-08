@@ -1,0 +1,282 @@
+# =============================================================================
+# postgresql-ha Helm chart values
+# -----------------------------------------------------------------------------
+# 기본값은 databases/postgresql-ha/manifests/ 의 raw 매니페스트와 동일한 결과를
+# 만들도록 맞춰져 있습니다. 즉 `helm install postgresql-ha ./helm -n databases`
+# 와 `./scripts/deploy.sh apply databases` 결과가 동등합니다.
+# =============================================================================
+
+# 이름 오버라이드. 비워두면 release name 기준으로 fullname 결정 (release==chart 이면 chart name 사용).
+nameOverride: ""
+fullnameOverride: ""
+
+# raw 매니페스트(databases/postgresql-ha/manifests/) 와 100% 동일한 리소스 이름을 만들기 위한 명시적 컴포넌트 이름.
+# 기본값은 운영 클러스터에 이미 배포된 이름과 정확히 일치합니다.
+# 비워두면 fullname + 표준 접미사 (release-aware) 로 자동 계산 됩니다.
+componentNames:
+  serviceAccount: postgresql-sa
+  role: postgresql-role
+  roleBinding: postgresql-rb
+  configMap: postgresql-config
+  backupPvc: postgresql-backup-volume
+  # services/statefulset 는 fullname 기반 (release name = chart name 일 때 postgresql-ha-*)
+
+# -----------------------------------------------------------------------------
+# image
+# -----------------------------------------------------------------------------
+image:
+  repository: harbor.nova.office/library/databases/postgresql
+  tag: latest
+  pullPolicy: Always
+  pullSecrets: []
+    # - name: harbor-pull-secret
+
+# -----------------------------------------------------------------------------
+# topology
+# -----------------------------------------------------------------------------
+replicaCount: 2  # 현재 스크립트는 2 노드 전제. 변경 시 sync_names 등 함께 조정 필요.
+
+podManagementPolicy: OrderedReady
+terminationGracePeriodSeconds: 60
+shareProcessNamespace: true
+
+podAntiAffinity:
+  enabled: true
+  type: preferred  # "preferred" or "required"
+  weight: 100
+  topologyKey: kubernetes.io/hostname
+
+# -----------------------------------------------------------------------------
+# postgresql HA tunables — env 로 모든 컨테이너에 주입됨
+# -----------------------------------------------------------------------------
+postgresql:
+  version: "16"
+  binDir: /opt/postgresql/bin
+  confDir: /opt/postgresql/conf
+  dataDir: /opt/postgresql/data
+  backupDir: /opt/postgresql/backup
+  logDir: /var/log/postgresql
+  socketDir: /var/run/postgresql
+
+  # 인코딩/로케일 - 항상 명시적으로 박는다 (전역 설정에 의존 금지)
+  encoding: UTF-8
+  locale: ko_KR.UTF-8
+
+  port: 5432
+  listenAddress: "*"
+  superuser: postgres
+  replicationUser: postgres
+
+  leaseName: postgres-primary-lease
+  leaseDurationSec: 30
+  masterLabelValue: master
+
+  # synchronous_standby_names — replicaCount=2 가정. 변경 시 함께 수정.
+  syncNames: "ANY 1 (postgresql-ha-0,postgresql-ha-1)"
+
+  roleManagerLoopSec: 5
+  peerFailThreshold: 3
+  isolationThreshold: 3
+  renewFailThreshold: 3
+  peerWaitSec: 600
+
+  # 백업
+  backupRetentionDays: 56
+  backupScheduleDow: 6   # 1=Mon ... 7=Sun (cron 의 0/7 일요일과 다름)
+  backupScheduleHour: 2
+  backupCompressionLevel: 6
+
+# -----------------------------------------------------------------------------
+# postgresql.conf / pg_hba.conf / pg_ident.conf
+# -----------------------------------------------------------------------------
+config:
+  postgresql: |
+    listen_addresses = '*'
+    port = 5432
+    max_connections = 100
+
+    shared_buffers = 256MB
+    dynamic_shared_memory_type = posix
+
+    log_destination = 'stderr'
+    logging_collector = on
+    log_directory = '/var/log/postgresql'
+    log_filename = 'postgresql-%a.log'
+    log_truncate_on_rotation = on
+    log_rotation_age = 1d
+    log_rotation_size = 0
+    log_line_prefix = '%m [%p] '
+
+    log_timezone = 'Asia/Seoul'
+    timezone = 'Asia/Seoul'
+    datestyle = 'iso, ymd'
+    lc_messages = 'ko_KR.UTF-8'
+    lc_monetary = 'ko_KR.UTF-8'
+    lc_numeric = 'ko_KR.UTF-8'
+    lc_time = 'ko_KR.UTF-8'
+    default_text_search_config = 'pg_catalog.simple'
+
+    wal_level = replica
+    max_wal_senders = 10
+    max_replication_slots = 10
+    hot_standby = on
+    wal_log_hints = on
+    wal_keep_size = 1GB
+    max_slot_wal_keep_size = 4GB
+    hot_standby_feedback = on
+    wal_sender_timeout = 60s
+    wal_receiver_timeout = 60s
+
+    synchronous_commit = on
+    synchronous_standby_names = ''
+
+    archive_mode = off
+
+  pgHba: |
+    # 폐쇄망 전제. 외부 노출은 maintainer 가 별도 통제 필요.
+    local    all             all                         trust
+    host     all             all          127.0.0.1/32   trust
+    host     all             all          ::1/128        trust
+    host     all             all          0.0.0.0/0      trust
+    host     all             all          ::/0           trust
+    local    replication     all                         trust
+    host     replication     all          127.0.0.1/32   trust
+    host     replication     all          ::1/128        trust
+    host     replication     all          0.0.0.0/0      trust
+    host     replication     all          ::/0           trust
+
+  pgIdent: |
+    # 현재 ident 인증 미사용
+
+# -----------------------------------------------------------------------------
+# 영속 스토리지
+# -----------------------------------------------------------------------------
+persistence:
+  data:
+    storageClass: block-sc-retain
+    accessModes:
+      - ReadWriteOnce
+    size: 64Gi
+  backup:
+    enabled: true
+    storageClass: filesystem-sc
+    accessModes:
+      - ReadWriteMany
+    size: 50Gi
+    # 외부에서 이미 만든 PVC 를 재사용하려면 existingClaim 지정
+    existingClaim: ""
+
+# -----------------------------------------------------------------------------
+# Service
+# -----------------------------------------------------------------------------
+service:
+  headless:
+    name: ""  # 비우면 "<fullname>-headless-service"
+    publishNotReadyAddresses: true
+  read:
+    type: NodePort        # ClusterIP / NodePort / LoadBalancer
+    nodePort: 30112       # type=NodePort 일 때만
+    name: ""              # 비우면 "<fullname>-read-service"
+  write:
+    type: NodePort
+    nodePort: 30111
+    name: ""
+
+# -----------------------------------------------------------------------------
+# Lease 사전 생성 여부 (없어도 init-ha-bootstrap 이 자동 생성)
+# -----------------------------------------------------------------------------
+lease:
+  create: true
+
+# -----------------------------------------------------------------------------
+# RBAC / ServiceAccount
+# -----------------------------------------------------------------------------
+serviceAccount:
+  create: true
+  name: ""    # 비우면 "<fullname>-sa"
+  automountToken: true
+
+rbac:
+  create: true
+
+# -----------------------------------------------------------------------------
+# Pod 보안 / 리소스
+# -----------------------------------------------------------------------------
+podSecurityContext:
+  fsGroup: 1000
+
+containerSecurityContext:
+  runAsUser: 1000
+  runAsGroup: 1000
+
+# initContainer init-check-dir 는 root 권한이 필요 (PVC chown)
+initCheckDir:
+  runAsUser: 0
+  allowPrivilegeEscalation: true
+
+resources:
+  postgresql:
+    requests:
+      cpu: 500m
+      memory: 512Mi
+    limits:
+      cpu: "2"
+      memory: 2Gi
+  roleManager:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 256Mi
+  backupCron:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+
+# -----------------------------------------------------------------------------
+# Probes
+# -----------------------------------------------------------------------------
+probes:
+  readiness:
+    initialDelaySeconds: 15
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 3
+  liveness:
+    initialDelaySeconds: 60
+    periodSeconds: 15
+    timeoutSeconds: 5
+    failureThreshold: 6
+
+# -----------------------------------------------------------------------------
+# 라벨/어노테이션 추가 (옵션)
+# -----------------------------------------------------------------------------
+commonLabels: {}
+commonAnnotations: {}
+podLabels: {}
+podAnnotations: {}
+
+# -----------------------------------------------------------------------------
+# updateStrategy / PVC retention
+# -----------------------------------------------------------------------------
+updateStrategy:
+  type: RollingUpdate
+  rollingUpdate:
+    maxUnavailable: 1
+    partition: 0
+
+persistentVolumeClaimRetentionPolicy:
+  whenDeleted: Retain
+  whenScaled: Retain
+
+# -----------------------------------------------------------------------------
+# 노드 배치 (옵션)
+# -----------------------------------------------------------------------------
+nodeSelector: {}
+tolerations: []
+# 사용자 정의 affinity (podAntiAffinity 보다 우선)
+customAffinity: {}

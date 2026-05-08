@@ -1,0 +1,28 @@
+apiVersion: v2
+name: postgresql-ha
+description: |
+  PostgreSQL 16 HA stack on Kubernetes — Lease-based primary election with
+  pg_rewind/pg_basebackup auto-recovery, read-availability-first policy,
+  weekly logical backups (globals + per-DB pg_dump custom), Korean locale.
+type: application
+version: 0.1.0
+appVersion: "16.13"
+kubeVersion: ">=1.30.0-0"
+keywords:
+  - postgresql
+  - postgres
+  - database
+  - ha
+  - high-availability
+  - statefulset
+  - lease
+  - replication
+home: https://github.com/newshure/cloud_native
+icon: https://www.postgresql.org/media/img/about/press/elephant.png
+sources:
+  - https://github.com/newshure/cloud_native/tree/main/databases/postgresql-ha
+maintainers:
+  - name: newshure
+    email: bigdatabiz.share@gmail.com
+annotations:
+  category: Database

@@ -1,0 +1,42 @@
+================================================================================
+postgresql-ha {{ .Chart.AppVersion }} 가 namespace "{{ .Release.Namespace }}" 에 설치되었습니다.
+release: {{ .Release.Name }}
+================================================================================
+
+[1] Pod 상태 확인
+  kubectl -n {{ .Release.Namespace }} get pods -l app={{ include "postgresql-ha.fullname" . }} -o wide
+
+[2] Primary 확인 (role=master 라벨이 한쪽에만 붙으면 정상)
+  kubectl -n {{ .Release.Namespace }} get pods -l app={{ include "postgresql-ha.fullname" . }} -L role
+
+[3] Lease 상태
+  kubectl -n {{ .Release.Namespace }} get lease {{ .Values.postgresql.leaseName }} -o yaml
+
+[4] Service Endpoints
+  - write (master 1개만 매칭): {{ include "postgresql-ha.writeServiceName" . }}
+{{- if eq .Values.service.write.type "NodePort" }} (NodePort {{ .Values.service.write.nodePort }}){{ end }}
+  - read  (Pod 모두 매칭):     {{ include "postgresql-ha.readServiceName" . }}
+{{- if eq .Values.service.read.type "NodePort" }} (NodePort {{ .Values.service.read.nodePort }}){{ end }}
+  - headless (StatefulSet):    {{ include "postgresql-ha.headlessServiceName" . }}
+
+[5] 클러스터 내부에서 psql 접속 예
+  PSQL_DSN="host={{ include "postgresql-ha.writeServiceName" . }}.{{ .Release.Namespace }}.svc.cluster.local port={{ .Values.postgresql.port }} user={{ .Values.postgresql.superuser }} dbname=postgres"
+  kubectl -n {{ .Release.Namespace }} run psql-client --rm -it --restart=Never \
+    --image={{ .Values.image.repository }}:{{ .Values.image.tag }} -- \
+    psql "$PSQL_DSN"
+
+[6] 백업 산출물 확인
+  kubectl -n {{ .Release.Namespace }} exec {{ include "postgresql-ha.fullname" . }}-0 -c backup-cron -- \
+    ls -al {{ .Values.postgresql.backupDir }}/{{ include "postgresql-ha.fullname" . }}-0/scheduled
+  kubectl -n {{ .Release.Namespace }} exec {{ include "postgresql-ha.fullname" . }}-1 -c backup-cron -- \
+    ls -al {{ .Values.postgresql.backupDir }}/{{ include "postgresql-ha.fullname" . }}-1/scheduled
+
+[7] 운영 매뉴얼 / 트러블슈팅
+  databases/postgresql-ha/README.md 참고
+
+[!] 주의사항
+  - pg_hba.conf 가 trust 인증입니다. 외부 노출 금지, 네트워크 레벨 통제 필수.
+  - PVC 는 Retain 정책입니다. 삭제 시 수동 정리:
+      kubectl -n {{ .Release.Namespace }} delete pvc data-{{ include "postgresql-ha.fullname" . }}-0 \
+                                                  data-{{ include "postgresql-ha.fullname" . }}-1 \
+                                                  {{ include "postgresql-ha.backupPvcName" . }}

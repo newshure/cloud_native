@@ -1,0 +1,19 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "postgresql-ha.writeServiceName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "postgresql-ha.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.service.write.type }}
+  selector:
+    {{- include "postgresql-ha.selectorLabels" . | nindent 4 }}
+    role: {{ .Values.postgresql.masterLabelValue }}
+  ports:
+    - name: postgres
+      port: {{ .Values.postgresql.port }}
+      targetPort: {{ .Values.postgresql.port }}
+      {{- if and (eq .Values.service.write.type "NodePort") .Values.service.write.nodePort }}
+      nodePort: {{ .Values.service.write.nodePort }}
+      {{- end }}
