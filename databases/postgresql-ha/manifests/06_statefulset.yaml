@@ -1,0 +1,329 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgresql-ha
+spec:
+  serviceName: postgresql-ha-headless-service
+  replicas: 2
+  podManagementPolicy: OrderedReady
+  persistentVolumeClaimRetentionPolicy:
+    whenDeleted: Retain
+    whenScaled: Retain
+  selector:
+    matchLabels:
+      app: postgresql-ha
+  template:
+    metadata:
+      labels:
+        app: postgresql-ha
+    spec:
+      serviceAccountName: postgresql-sa
+      automountServiceAccountToken: true
+      shareProcessNamespace: true
+      terminationGracePeriodSeconds: 60
+      securityContext:
+        fsGroup: 1000
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchLabels:
+                    app: postgresql-ha
+                topologyKey: kubernetes.io/hostname
+
+      initContainers:
+        - name: init-check-dir
+          image: harbor.nova.office/library/databases/postgresql:latest
+          imagePullPolicy: Always
+          securityContext:
+            runAsUser: 0
+            allowPrivilegeEscalation: true
+          command:
+            - /bin/bash
+            - -c
+            - |
+              set -e
+              mkdir -p /opt/postgresql/data /opt/postgresql/backup
+              chown -R 1000:1000 /opt/postgresql/data /opt/postgresql/backup
+              chmod 700 /opt/postgresql/data
+              chmod 755 /opt/postgresql/backup
+          volumeMounts:
+            - name: data
+              mountPath: /opt/postgresql/data
+            - name: backup
+              mountPath: /opt/postgresql/backup
+
+        - name: init-ha-bootstrap
+          image: harbor.nova.office/library/databases/postgresql:latest
+          imagePullPolicy: Always
+          securityContext:
+            runAsUser: 1000
+            runAsGroup: 1000
+          command: ["/bin/bash", "/opt/postgresql/bin/init-ha-bootstrap.sh"]
+          env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - { name: POSTGRESQL_VERSION, value: "16" }
+            - { name: POSTGRESQL_BIN_DIR, value: "/opt/postgresql/bin" }
+            - { name: POSTGRESQL_CONF_DIR, value: "/opt/postgresql/conf" }
+            - { name: POSTGRESQL_DATA_DIR, value: "/opt/postgresql/data" }
+            - { name: POSTGRESQL_BACKUP_DIR, value: "/opt/postgresql/backup" }
+            - { name: POSTGRESQL_LOG_DIR, value: "/var/log/postgresql" }
+            - { name: POSTGRESQL_SOCKET_DIR, value: "/var/run/postgresql" }
+            - { name: POSTGRESQL_ENCODING, value: "UTF-8" }
+            - { name: POSTGRESQL_LOCALE, value: "ko_KR.UTF-8" }
+            - { name: POSTGRESQL_PORT, value: "5432" }
+            - { name: POSTGRESQL_LISTEN_ADDRESS, value: "*" }
+            - { name: POSTGRESQL_SUPERUSER, value: "postgres" }
+            - { name: POSTGRESQL_REPLICATION_USER, value: "postgres" }
+            - { name: POSTGRESQL_REPLICAS, value: "2" }
+            - { name: POSTGRESQL_STS_NAME, value: "postgresql-ha" }
+            - { name: POSTGRESQL_HEADLESS_SVC_NAME, value: "postgresql-ha-headless-service" }
+            - { name: POSTGRESQL_LEASE_NAME, value: "postgres-primary-lease" }
+            - { name: POSTGRESQL_LEASE_DURATION_SEC, value: "30" }
+            - { name: POSTGRESQL_MASTER_LABEL_VALUE, value: "master" }
+            - { name: POSTGRESQL_SYNC_NAMES, value: "ANY 1 (postgresql-ha-0,postgresql-ha-1)" }
+            - { name: POSTGRESQL_ROLE_MGR_LOOP_SEC, value: "5" }
+            - { name: POSTGRESQL_PEER_FAIL_THRESHOLD, value: "3" }
+            - { name: POSTGRESQL_ISOLATION_THRESHOLD, value: "3" }
+            - { name: POSTGRESQL_RENEW_FAIL_THRESHOLD, value: "3" }
+            - { name: POSTGRESQL_PEER_WAIT_SEC, value: "600" }
+            - { name: POSTGRESQL_BACKUP_RETENTION_DAYS, value: "56" }
+            - { name: POSTGRESQL_BACKUP_SCHEDULE_DOW, value: "6" }
+            - { name: POSTGRESQL_BACKUP_SCHEDULE_HOUR, value: "2" }
+            - { name: POSTGRESQL_BACKUP_COMPRESSION_LEVEL, value: "6" }
+          volumeMounts:
+            - name: data
+              mountPath: /opt/postgresql/data
+            - name: socket
+              mountPath: /var/run/postgresql
+            - name: pglog
+              mountPath: /var/log/postgresql
+            - name: config
+              mountPath: /opt/postgresql/conf/postgresql.conf
+              subPath: postgresql.conf
+              readOnly: true
+            - name: config
+              mountPath: /opt/postgresql/conf/pg_hba.conf
+              subPath: pg_hba.conf
+              readOnly: true
+            - name: config
+              mountPath: /opt/postgresql/conf/pg_ident.conf
+              subPath: pg_ident.conf
+              readOnly: true
+
+      containers:
+        - name: postgresql
+          image: harbor.nova.office/library/databases/postgresql:latest
+          imagePullPolicy: Always
+          securityContext:
+            runAsUser: 1000
+            runAsGroup: 1000
+          ports:
+            - name: postgres
+              containerPort: 5432
+          command: ["/bin/bash", "/opt/postgresql/bin/entrypoint.sh"]
+          env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - { name: POSTGRESQL_VERSION, value: "16" }
+            - { name: POSTGRESQL_BIN_DIR, value: "/opt/postgresql/bin" }
+            - { name: POSTGRESQL_CONF_DIR, value: "/opt/postgresql/conf" }
+            - { name: POSTGRESQL_DATA_DIR, value: "/opt/postgresql/data" }
+            - { name: POSTGRESQL_BACKUP_DIR, value: "/opt/postgresql/backup" }
+            - { name: POSTGRESQL_LOG_DIR, value: "/var/log/postgresql" }
+            - { name: POSTGRESQL_SOCKET_DIR, value: "/var/run/postgresql" }
+            - { name: POSTGRESQL_ENCODING, value: "UTF-8" }
+            - { name: POSTGRESQL_LOCALE, value: "ko_KR.UTF-8" }
+            - { name: POSTGRESQL_PORT, value: "5432" }
+            - { name: POSTGRESQL_LISTEN_ADDRESS, value: "*" }
+            - { name: POSTGRESQL_SUPERUSER, value: "postgres" }
+            - { name: POSTGRESQL_REPLICATION_USER, value: "postgres" }
+            - { name: POSTGRESQL_REPLICAS, value: "2" }
+            - { name: POSTGRESQL_STS_NAME, value: "postgresql-ha" }
+            - { name: POSTGRESQL_HEADLESS_SVC_NAME, value: "postgresql-ha-headless-service" }
+            - { name: POSTGRESQL_LEASE_NAME, value: "postgres-primary-lease" }
+            - { name: POSTGRESQL_LEASE_DURATION_SEC, value: "30" }
+            - { name: POSTGRESQL_MASTER_LABEL_VALUE, value: "master" }
+            - { name: POSTGRESQL_SYNC_NAMES, value: "ANY 1 (postgresql-ha-0,postgresql-ha-1)" }
+            - { name: POSTGRESQL_ROLE_MGR_LOOP_SEC, value: "5" }
+            - { name: POSTGRESQL_PEER_FAIL_THRESHOLD, value: "3" }
+            - { name: POSTGRESQL_ISOLATION_THRESHOLD, value: "3" }
+            - { name: POSTGRESQL_RENEW_FAIL_THRESHOLD, value: "3" }
+            - { name: POSTGRESQL_PEER_WAIT_SEC, value: "600" }
+            - { name: POSTGRESQL_BACKUP_RETENTION_DAYS, value: "56" }
+            - { name: POSTGRESQL_BACKUP_SCHEDULE_DOW, value: "6" }
+            - { name: POSTGRESQL_BACKUP_SCHEDULE_HOUR, value: "2" }
+            - { name: POSTGRESQL_BACKUP_COMPRESSION_LEVEL, value: "6" }
+          volumeMounts:
+            - name: data
+              mountPath: /opt/postgresql/data
+            - name: socket
+              mountPath: /var/run/postgresql
+            - name: pglog
+              mountPath: /var/log/postgresql
+          readinessProbe:
+            exec:
+              command: ["/bin/bash", "/opt/postgresql/bin/readiness.sh"]
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          livenessProbe:
+            exec:
+              command: ["/bin/bash", "/opt/postgresql/bin/liveness.sh"]
+            initialDelaySeconds: 60
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 6
+          lifecycle:
+            preStop:
+              exec:
+                command: ["/bin/bash", "/opt/postgresql/bin/prestop.sh"]
+          resources:
+            requests: { cpu: "500m", memory: "512Mi" }
+            limits: { cpu: "2", memory: "2Gi" }
+
+        - name: role-manager
+          image: harbor.nova.office/library/databases/postgresql:latest
+          imagePullPolicy: Always
+          securityContext:
+            runAsUser: 1000
+            runAsGroup: 1000
+          command: ["/bin/bash", "/opt/postgresql/bin/role-manager.sh"]
+          env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - { name: POSTGRESQL_VERSION, value: "16" }
+            - { name: POSTGRESQL_BIN_DIR, value: "/opt/postgresql/bin" }
+            - { name: POSTGRESQL_CONF_DIR, value: "/opt/postgresql/conf" }
+            - { name: POSTGRESQL_DATA_DIR, value: "/opt/postgresql/data" }
+            - { name: POSTGRESQL_BACKUP_DIR, value: "/opt/postgresql/backup" }
+            - { name: POSTGRESQL_LOG_DIR, value: "/var/log/postgresql" }
+            - { name: POSTGRESQL_SOCKET_DIR, value: "/var/run/postgresql" }
+            - { name: POSTGRESQL_ENCODING, value: "UTF-8" }
+            - { name: POSTGRESQL_LOCALE, value: "ko_KR.UTF-8" }
+            - { name: POSTGRESQL_PORT, value: "5432" }
+            - { name: POSTGRESQL_LISTEN_ADDRESS, value: "*" }
+            - { name: POSTGRESQL_SUPERUSER, value: "postgres" }
+            - { name: POSTGRESQL_REPLICATION_USER, value: "postgres" }
+            - { name: POSTGRESQL_REPLICAS, value: "2" }
+            - { name: POSTGRESQL_STS_NAME, value: "postgresql-ha" }
+            - { name: POSTGRESQL_HEADLESS_SVC_NAME, value: "postgresql-ha-headless-service" }
+            - { name: POSTGRESQL_LEASE_NAME, value: "postgres-primary-lease" }
+            - { name: POSTGRESQL_LEASE_DURATION_SEC, value: "30" }
+            - { name: POSTGRESQL_MASTER_LABEL_VALUE, value: "master" }
+            - { name: POSTGRESQL_SYNC_NAMES, value: "ANY 1 (postgresql-ha-0,postgresql-ha-1)" }
+            - { name: POSTGRESQL_ROLE_MGR_LOOP_SEC, value: "5" }
+            - { name: POSTGRESQL_PEER_FAIL_THRESHOLD, value: "3" }
+            - { name: POSTGRESQL_ISOLATION_THRESHOLD, value: "3" }
+            - { name: POSTGRESQL_RENEW_FAIL_THRESHOLD, value: "3" }
+            - { name: POSTGRESQL_PEER_WAIT_SEC, value: "600" }
+            - { name: POSTGRESQL_BACKUP_RETENTION_DAYS, value: "56" }
+            - { name: POSTGRESQL_BACKUP_SCHEDULE_DOW, value: "6" }
+            - { name: POSTGRESQL_BACKUP_SCHEDULE_HOUR, value: "2" }
+            - { name: POSTGRESQL_BACKUP_COMPRESSION_LEVEL, value: "6" }
+          volumeMounts:
+            - name: data
+              mountPath: /opt/postgresql/data
+            - name: socket
+              mountPath: /var/run/postgresql
+          resources:
+            requests: { cpu: "50m", memory: "64Mi" }
+            limits: { cpu: "200m", memory: "256Mi" }
+
+        - name: backup-cron
+          image: harbor.nova.office/library/databases/postgresql:latest
+          imagePullPolicy: Always
+          securityContext:
+            runAsUser: 1000
+            runAsGroup: 1000
+          command: ["/bin/bash","-c","/opt/postgresql/bin/backup-cron.sh"]
+          env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - { name: POSTGRESQL_VERSION, value: "16" }
+            - { name: POSTGRESQL_BIN_DIR, value: "/opt/postgresql/bin" }
+            - { name: POSTGRESQL_CONF_DIR, value: "/opt/postgresql/conf" }
+            - { name: POSTGRESQL_DATA_DIR, value: "/opt/postgresql/data" }
+            - { name: POSTGRESQL_BACKUP_DIR, value: "/opt/postgresql/backup" }
+            - { name: POSTGRESQL_LOG_DIR, value: "/var/log/postgresql" }
+            - { name: POSTGRESQL_SOCKET_DIR, value: "/var/run/postgresql" }
+            - { name: POSTGRESQL_ENCODING, value: "UTF-8" }
+            - { name: POSTGRESQL_LOCALE, value: "ko_KR.UTF-8" }
+            - { name: POSTGRESQL_PORT, value: "5432" }
+            - { name: POSTGRESQL_LISTEN_ADDRESS, value: "*" }
+            - { name: POSTGRESQL_SUPERUSER, value: "postgres" }
+            - { name: POSTGRESQL_REPLICATION_USER, value: "postgres" }
+            - { name: POSTGRESQL_REPLICAS, value: "2" }
+            - { name: POSTGRESQL_STS_NAME, value: "postgresql-ha" }
+            - { name: POSTGRESQL_HEADLESS_SVC_NAME, value: "postgresql-ha-headless-service" }
+            - { name: POSTGRESQL_LEASE_NAME, value: "postgres-primary-lease" }
+            - { name: POSTGRESQL_LEASE_DURATION_SEC, value: "30" }
+            - { name: POSTGRESQL_MASTER_LABEL_VALUE, value: "master" }
+            - { name: POSTGRESQL_SYNC_NAMES, value: "ANY 1 (postgresql-ha-0,postgresql-ha-1)" }
+            - { name: POSTGRESQL_ROLE_MGR_LOOP_SEC, value: "5" }
+            - { name: POSTGRESQL_PEER_FAIL_THRESHOLD, value: "3" }
+            - { name: POSTGRESQL_ISOLATION_THRESHOLD, value: "3" }
+            - { name: POSTGRESQL_RENEW_FAIL_THRESHOLD, value: "3" }
+            - { name: POSTGRESQL_PEER_WAIT_SEC, value: "600" }
+            - { name: POSTGRESQL_BACKUP_RETENTION_DAYS, value: "56" }
+            - { name: POSTGRESQL_BACKUP_SCHEDULE_DOW, value: "6" }
+            - { name: POSTGRESQL_BACKUP_SCHEDULE_HOUR, value: "2" }
+            - { name: POSTGRESQL_BACKUP_COMPRESSION_LEVEL, value: "6" }
+          volumeMounts:
+            - name: socket
+              mountPath: /var/run/postgresql
+            - name: backup
+              mountPath: /opt/postgresql/backup
+          resources:
+            requests: { cpu: "100m", memory: "128Mi" }
+            limits: { cpu: "1", memory: "1Gi" }
+
+      volumes:
+        - name: pglog
+          emptyDir: {}
+        - name: socket
+          emptyDir: {}
+        - name: config
+          configMap:
+            name: postgresql-config
+        - name: backup
+          persistentVolumeClaim:
+            claimName: postgresql-backup-volume
+
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        storageClassName: block-sc-retain
+        resources:
+          requests:
+            storage: 64Gi

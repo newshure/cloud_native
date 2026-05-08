@@ -1,0 +1,55 @@
+# =============================================================================
+# cloud_native — root .gitignore
+# =============================================================================
+
+# Rendered manifests / temp output
+**/rendered/
+**/.tmp/
+**/tmp/
+*.bak
+*.swp
+*~
+
+# OS / Editor
+.DS_Store
+Thumbs.db
+desktop.ini
+.idea/
+.vscode/
+*.code-workspace
+
+# Secrets (never commit)
+*.key
+*.pem
+*.p12
+*.pfx
+.env
+.env.*
+!.env.example
+secrets/
+**/credentials.json
+
+# Logs / runtime
+*.log
+logs/
+
+# Python (in case CI/tooling lands here)
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Node (in case CI/tooling lands here)
+node_modules/
+npm-debug.log*
+
+# Local kubeconfig overrides
+kubeconfig
+kubeconfig.local
+*.kubeconfig
+
+# Backups / dumps (PostgreSQL artifacts shouldn't sit in git)
+*.dump
+*.sql.gz
+*.tar.gz
+backup/

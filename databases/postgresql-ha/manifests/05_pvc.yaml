@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: postgresql-backup-volume
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: filesystem-sc
+  resources:
+    requests:
+      storage: 50Gi
