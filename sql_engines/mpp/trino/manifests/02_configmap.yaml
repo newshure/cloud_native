@@ -1,0 +1,164 @@
+# =============================================================================
+# Trino ConfigMaps
+# - trino-coordinator-configmap : coordinator 용 Trino etc/* 템플릿
+# - trino-worker-configmap      : worker 용 Trino etc/* 템플릿
+# - trino-catalog-configmap     : 카탈로그(.properties) 정의 (placeholder 포함)
+#
+# 컨테이너 진입 시 /opt/trino/bin/{coordinator,worker}-container.sh 가 envsubst
+# 로 ${...} 변수를 실값으로 치환하여 etc/ 아래로 렌더합니다.
+# =============================================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: trino-coordinator-configmap
+  namespace: __NAMESPACE__
+  labels:
+    app: trino-coordinator
+data:
+  node.properties.template: |
+    node.environment=production
+    node.data-dir=${TRINO_HOME}/data
+    plugin.dir=${TRINO_HOME}/plugin
+    node.launcher-log-file=${TRINO_LAUNCHER_LOG}
+    node.server-log-file=${TRINO_SERVER_LOG}
+
+  jvm.config.template: |
+    -server
+    -XX:InitialRAMPercentage=${JAVA_INITIAL_RAM_PERCENTAGE}
+    -XX:MaxRAMPercentage=${JAVA_MAX_RAM_PERCENTAGE}
+    -XX:+UseContainerSupport
+    -XX:+UseG1GC
+    -XX:G1HeapRegionSize=${JAVA_G1_HEAP_REGION_SIZE}
+    -XX:ReservedCodeCacheSize=${RESERVED_CODE_CACHE_SIZE}
+    -XX:+ExplicitGCInvokesConcurrent
+    -XX:+HeapDumpOnOutOfMemoryError
+    -XX:HeapDumpPath=${TRINO_HEAPDUMP_PATH}
+    -XX:+ExitOnOutOfMemoryError
+    -XX:-OmitStackTraceInFastThrow
+    -XX:PerMethodRecompilationCutoff=10000
+    -XX:PerBytecodeRecompilationCutoff=10000
+    -Djdk.attach.allowAttachSelf=true
+    -Djdk.nio.maxCachedBufferSize=2000000
+    -XX:OnOutOfMemoryError="kill -9 %p"
+    -Dfile.encoding=UTF-8
+    -Duser.timezone=Asia/Seoul
+
+  config.properties.template: |
+    coordinator=${COORDINATOR_ENABLED}
+    node-scheduler.include-coordinator=${WORKER_ENABLED}
+    query.max-total-memory=${QUERY_TOTAL_MEMORY}
+    query.max-memory=${QUERY_MAX_MEMORY}
+
+    http-server.http.port=${TRINO_SERVER_HTTP_PORT}
+    http-server.https.enabled=true
+    http-server.https.port=${TRINO_SERVER_HTTPS_PORT}
+    http-server.https.keystore.path=${TRINO_HTTPS_SERVER_CERT_PATH}
+    http-server.authentication.type=${TRINO_SERVER_AUTH_TYPE}
+    spill-enabled=${SPILL_ENABLED}
+
+    discovery.uri=${TRINO_SERVER_DISCOVERY_URI}
+    internal-communication.https.required=false
+    internal-communication.shared-secret=${TRINO_INTERNAL_SHARED_SECRET}
+    http-server.authentication.allow-insecure-over-http=true
+    http-server.process-forwarded=true
+
+  log.properties.template: |
+    io.trino=INFO
+
+  password-authenticator.properties.template: |
+    password-authenticator.name=file
+    file.password-file=/opt/trino/etc/password.db
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: trino-worker-configmap
+  namespace: __NAMESPACE__
+  labels:
+    app: trino-worker
+data:
+  node.properties.template: |
+    node.environment=production
+    node.data-dir=${TRINO_HOME}/data
+    plugin.dir=${TRINO_HOME}/plugin
+    node.launcher-log-file=${TRINO_LAUNCHER_LOG}
+    node.server-log-file=${TRINO_SERVER_LOG}
+
+  jvm.config.template: |
+    -server
+    -XX:InitialRAMPercentage=${JAVA_INITIAL_RAM_PERCENTAGE}
+    -XX:MaxRAMPercentage=${JAVA_MAX_RAM_PERCENTAGE}
+    -XX:+UseContainerSupport
+    -XX:+UseG1GC
+    -XX:G1HeapRegionSize=${JAVA_G1_HEAP_REGION_SIZE}
+    -XX:ReservedCodeCacheSize=${RESERVED_CODE_CACHE_SIZE}
+    -XX:+ExplicitGCInvokesConcurrent
+    -XX:+HeapDumpOnOutOfMemoryError
+    -XX:HeapDumpPath=${TRINO_HEAPDUMP_PATH}
+    -XX:+ExitOnOutOfMemoryError
+    -XX:-OmitStackTraceInFastThrow
+    -XX:PerMethodRecompilationCutoff=10000
+    -XX:PerBytecodeRecompilationCutoff=10000
+    -Djdk.attach.allowAttachSelf=true
+    -Djdk.nio.maxCachedBufferSize=2000000
+    -XX:OnOutOfMemoryError="kill -9 %p"
+    -Dfile.encoding=UTF-8
+    -Duser.timezone=Asia/Seoul
+
+  config.properties.template: |
+    coordinator=${COORDINATOR_ENABLED}
+    node-scheduler.include-coordinator=${WORKER_ENABLED}
+    query.max-memory-per-node=${QUERY_MAX_MEMORY_PER_NODE}
+    memory.heap-headroom-per-node=${MEMORY_HEAP_HEADROOM_PER_NODE}
+
+    http-server.http.port=${TRINO_SERVER_HTTP_PORT}
+    http-server.https.enabled=true
+    http-server.https.port=${TRINO_SERVER_HTTPS_PORT}
+    http-server.https.keystore.path=${TRINO_HTTPS_SERVER_CERT_PATH}
+    http-server.authentication.type=${TRINO_SERVER_AUTH_TYPE}
+    spill-enabled=${SPILL_ENABLED}
+
+    discovery.uri=${TRINO_SERVER_DISCOVERY_URI}
+    internal-communication.https.required=false
+    internal-communication.shared-secret=${TRINO_INTERNAL_SHARED_SECRET}
+    http-server.authentication.allow-insecure-over-http=true
+    http-server.process-forwarded=true
+
+  log.properties.template: |
+    io.trino=INFO
+
+  password-authenticator.properties.template: |
+    password-authenticator.name=file
+    file.password-file=/opt/trino/etc/password.db
+---
+# -----------------------------------------------------------------------------
+# Catalog ConfigMap — TEMPLATE (placeholders only)
+# Placeholders:
+#   ${TRINO_DB_PASSWORD_TRINO}   : trino DB 의 trino 사용자 비밀번호
+#   ${TRINO_DB_PASSWORD_AIRFLOW} : airflow DB 의 airflow 사용자 비밀번호
+#
+# 권장: 평문 commit 대신 secrets-plugin (이미지 내장) 으로 ${ENV:VAR} 참조
+# -----------------------------------------------------------------------------
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: trino-catalog-configmap
+  namespace: __NAMESPACE__
+  labels:
+    app: trino
+data:
+  postgresql_0.properties: |
+       connector.name=postgresql
+       connection-url=jdbc:postgresql://postgresql-service.databases:5432/trino
+       connection-user=trino
+       connection-password=${TRINO_DB_PASSWORD_TRINO}
+       decimal-default-scale=10
+       decimal-rounding-mode=HALF_UP
+
+  postgresql_0_airflow.properties: |
+       connector.name=postgresql
+       connection-url=jdbc:postgresql://postgresql-service.databases:5432/airflow
+       connection-user=airflow
+       connection-password=${TRINO_DB_PASSWORD_AIRFLOW}
+       decimal-default-scale=10
+       decimal-rounding-mode=HALF_UP

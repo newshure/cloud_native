@@ -1,0 +1,27 @@
+apiVersion: v2
+name: trino
+description: |
+  Trino 479 distributed SQL engine on Kubernetes — coordinator (Deployment)
+  + worker (StatefulSet) with TLS, file-based password authentication, HPA,
+  PostgreSQL catalog connectors, NGINX Ingress with HTTPS termination.
+type: application
+version: 0.1.0
+appVersion: "479"
+kubeVersion: ">=1.30.0-0"
+keywords:
+  - trino
+  - presto
+  - sql
+  - mpp
+  - distributed
+  - statefulset
+  - deployment
+home: https://github.com/newshure/cloud_native
+icon: https://trino.io/assets/images/trino-logo-w.svg
+sources:
+  - https://github.com/newshure/cloud_native/tree/main/sql_engines/mpp/trino
+maintainers:
+  - name: newshure
+    email: bigdatabiz.share@gmail.com
+annotations:
+  category: SQLEngine

@@ -1,0 +1,37 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Values.componentNames.coordinatorService }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "trino.coordinatorLabels" . | nindent 4 }}
+spec:
+  type: {{ .Values.service.coordinator.type }}
+  selector:
+    {{- include "trino.coordinatorSelectorLabels" . | nindent 4 }}
+  ports:
+    - name: http
+      port: {{ .Values.service.coordinator.httpPort }}
+      targetPort: {{ .Values.service.coordinator.httpPort }}
+    - name: https
+      port: {{ .Values.service.coordinator.httpsPort }}
+      targetPort: {{ .Values.service.coordinator.httpsPort }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Values.componentNames.workerService }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "trino.workerLabels" . | nindent 4 }}
+spec:
+  type: {{ .Values.service.worker.type }}
+  selector:
+    {{- include "trino.workerSelectorLabels" . | nindent 4 }}
+  ports:
+    - name: http
+      port: {{ .Values.service.worker.httpPort }}
+      targetPort: {{ .Values.service.worker.httpPort }}
+    - name: https
+      port: {{ .Values.service.worker.httpsPort }}
+      targetPort: {{ .Values.service.worker.httpsPort }}

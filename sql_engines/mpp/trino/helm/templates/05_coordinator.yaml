@@ -1,0 +1,145 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Values.componentNames.coordinatorName }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "trino.coordinatorLabels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.coordinator.replicas }}
+  strategy:
+    type: {{ .Values.coordinator.strategy.type }}
+  selector:
+    matchLabels:
+      {{- include "trino.coordinatorSelectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "trino.coordinatorSelectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      terminationGracePeriodSeconds: {{ .Values.coordinator.terminationGracePeriodSeconds }}
+      {{- with .Values.image.pullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      initContainers:
+        - name: trino-initiator
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.initPullPolicy }}
+          command: ["/bin/bash", "-c", "/opt/trino/bin/init-container.sh"]
+          securityContext:
+            {{- toYaml .Values.initContainerSecurityContext | nindent 12 }}
+      containers:
+        - name: {{ .Values.componentNames.coordinatorName }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.service.coordinator.httpPort }}
+              protocol: TCP
+            - name: https
+              containerPort: {{ .Values.service.coordinator.httpsPort }}
+              protocol: TCP
+          resources:
+            {{- toYaml .Values.coordinator.resources | nindent 12 }}
+          env:
+            - name: COORDINATOR_ENABLED
+              value: "true"
+            - name: WORKER_ENABLED
+              value: "false"
+            - name: TRINO_SERVER_DISCOVERY_URI
+              value: {{ include "trino.coordinatorDiscoveryUri" . | quote }}
+            {{- range $k, $v := .Values.coordinator.env }}
+            - name: {{ $k }}
+              value: {{ $v | quote }}
+            {{- end }}
+            {{- include "trino.downwardEnv" . | nindent 12 }}
+          workingDir: /opt/trino
+          command: ["/bin/bash", "-c", "/opt/trino/bin/coordinator-container.sh"]
+          startupProbe:
+            httpGet:
+              path: /v1/info
+              port: {{ .Values.service.coordinator.httpPort }}
+            initialDelaySeconds: {{ .Values.probes.startup.initialDelaySeconds }}
+            periodSeconds: {{ .Values.probes.startup.periodSeconds }}
+            failureThreshold: {{ .Values.probes.startup.failureThreshold }}
+            timeoutSeconds: {{ .Values.probes.startup.timeoutSeconds }}
+          livenessProbe:
+            httpGet:
+              path: /v1/status
+              port: {{ .Values.service.coordinator.httpPort }}
+            periodSeconds: {{ .Values.probes.liveness.periodSeconds }}
+            failureThreshold: {{ .Values.probes.liveness.failureThreshold }}
+            timeoutSeconds: {{ .Values.probes.liveness.timeoutSeconds }}
+            successThreshold: {{ .Values.probes.liveness.successThreshold }}
+          readinessProbe:
+            httpGet:
+              path: /v1/info/state
+              port: {{ .Values.service.coordinator.httpPort }}
+            periodSeconds: {{ .Values.probes.readiness.periodSeconds }}
+            failureThreshold: {{ .Values.probes.readiness.failureThreshold }}
+            timeoutSeconds: {{ .Values.probes.readiness.timeoutSeconds }}
+            successThreshold: {{ .Values.probes.readiness.successThreshold }}
+          lifecycle:
+            preStop:
+              {{- include "trino.preStop" .Values.coordinator.preStopSleepSec | nindent 14 }}
+          securityContext:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          volumeMounts:
+            - name: trino-coordinator-configmap
+              mountPath: /opt/trino/etc/templates
+              readOnly: true
+            - name: trino-password-db-secret
+              mountPath: /opt/trino/etc/password.db
+              subPath: password.db
+              readOnly: true
+            - name: trino-catalog-configmap
+              mountPath: /opt/trino/etc/catalog
+              readOnly: true
+            - name: trino-cert-secret
+              mountPath: /opt/trino/etc/certs
+              readOnly: true
+            - name: trino-coordinator-data-volume
+              mountPath: /opt/trino/data
+            - name: trino-coordinator-heapdump-volume
+              mountPath: /opt/trino/dump
+      volumes:
+        - name: trino-coordinator-configmap
+          configMap:
+            name: {{ .Values.componentNames.coordinatorConfigMap }}
+        - name: trino-catalog-configmap
+          configMap:
+            name: {{ .Values.componentNames.catalogConfigMap }}
+        - name: trino-cert-secret
+          secret:
+            secretName: {{ .Values.componentNames.certSecret }}
+        - name: trino-password-db-secret
+          secret:
+            secretName: {{ .Values.componentNames.passwordDbSecret }}
+        - name: trino-coordinator-data-volume
+          persistentVolumeClaim:
+            claimName: {{ .Values.componentNames.coordinatorDataPvc }}
+        - name: trino-coordinator-heapdump-volume
+          persistentVolumeClaim:
+            claimName: {{ .Values.componentNames.coordinatorHeapdumpPvc }}

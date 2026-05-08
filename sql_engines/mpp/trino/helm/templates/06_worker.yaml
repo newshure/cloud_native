@@ -1,0 +1,174 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ .Values.componentNames.workerName }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "trino.workerLabels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.worker.replicas }}
+  serviceName: {{ .Values.worker.serviceName }}
+  selector:
+    matchLabels:
+      {{- include "trino.workerSelectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "trino.workerSelectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      terminationGracePeriodSeconds: {{ .Values.worker.terminationGracePeriodSeconds }}
+      {{- with .Values.image.pullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      initContainers:
+        - name: trino-initiator
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.initPullPolicy }}
+          command: ["/bin/bash", "-c", "/opt/trino/bin/init-container.sh"]
+          securityContext:
+            {{- toYaml .Values.initContainerSecurityContext | nindent 12 }}
+      containers:
+        - name: {{ .Values.componentNames.workerName }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.service.worker.httpPort }}
+              protocol: TCP
+            - name: https
+              containerPort: {{ .Values.service.worker.httpsPort }}
+              protocol: TCP
+          resources:
+            {{- toYaml .Values.worker.resources | nindent 12 }}
+          env:
+            - name: COORDINATOR_ENABLED
+              value: "false"
+            - name: WORKER_ENABLED
+              value: "true"
+            - name: TRINO_SERVER_DISCOVERY_URI
+              value: {{ include "trino.workerDiscoveryUri" . | quote }}
+            {{- range $k, $v := .Values.worker.env }}
+            - name: {{ $k }}
+              value: {{ $v | quote }}
+            {{- end }}
+            {{- include "trino.downwardEnv" . | nindent 12 }}
+          workingDir: /opt/trino
+          command: ["/bin/bash", "-c", "/opt/trino/bin/worker-container.sh"]
+          startupProbe:
+            httpGet:
+              path: /v1/info
+              port: {{ .Values.service.worker.httpPort }}
+            initialDelaySeconds: {{ .Values.probes.startup.initialDelaySeconds }}
+            periodSeconds: {{ .Values.probes.startup.periodSeconds }}
+            failureThreshold: {{ .Values.probes.startup.failureThreshold }}
+            timeoutSeconds: {{ .Values.probes.startup.timeoutSeconds }}
+          livenessProbe:
+            httpGet:
+              path: /v1/status
+              port: {{ .Values.service.worker.httpPort }}
+            periodSeconds: {{ .Values.probes.liveness.periodSeconds }}
+            failureThreshold: {{ .Values.probes.liveness.failureThreshold }}
+            timeoutSeconds: {{ .Values.probes.liveness.timeoutSeconds }}
+            successThreshold: {{ .Values.probes.liveness.successThreshold }}
+          readinessProbe:
+            httpGet:
+              path: /v1/info/state
+              port: {{ .Values.service.worker.httpPort }}
+            periodSeconds: {{ .Values.probes.readiness.periodSeconds }}
+            failureThreshold: {{ .Values.probes.readiness.failureThreshold }}
+            timeoutSeconds: {{ .Values.probes.readiness.timeoutSeconds }}
+            successThreshold: {{ .Values.probes.readiness.successThreshold }}
+          lifecycle:
+            preStop:
+              {{- include "trino.preStop" .Values.worker.preStopSleepSec | nindent 14 }}
+          securityContext:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          volumeMounts:
+            - name: trino-worker-configmap
+              mountPath: /opt/trino/etc/templates
+              readOnly: true
+            - name: trino-catalog-configmap
+              mountPath: /opt/trino/etc/catalog
+              readOnly: true
+            - name: trino-cert-secret
+              mountPath: /opt/trino/etc/certs
+              readOnly: true
+            - name: trino-password-db-secret
+              mountPath: /opt/trino/etc/password.db
+              subPath: password.db
+              readOnly: true
+            - name: trino-worker-data-volume
+              mountPath: /opt/trino/data
+            - name: trino-worker-heapdump-volume
+              mountPath: /opt/trino/dump
+            - name: trino-worker-spill-volume
+              mountPath: /opt/trino/spill
+      volumes:
+        - name: trino-worker-configmap
+          configMap:
+            name: {{ .Values.componentNames.workerConfigMap }}
+        - name: trino-catalog-configmap
+          configMap:
+            name: {{ .Values.componentNames.catalogConfigMap }}
+        - name: trino-cert-secret
+          secret:
+            secretName: {{ .Values.componentNames.certSecret }}
+        - name: trino-password-db-secret
+          secret:
+            secretName: {{ .Values.componentNames.passwordDbSecret }}
+  volumeClaimTemplates:
+    - metadata:
+        name: trino-worker-data-volume
+      spec:
+        accessModes:
+          {{- range .Values.persistence.accessModes }}
+          - {{ . | quote }}
+          {{- end }}
+        storageClassName: {{ .Values.persistence.storageClass | quote }}
+        resources:
+          requests:
+            storage: {{ .Values.persistence.worker.data.size | quote }}
+    - metadata:
+        name: trino-worker-heapdump-volume
+      spec:
+        accessModes:
+          {{- range .Values.persistence.accessModes }}
+          - {{ . | quote }}
+          {{- end }}
+        storageClassName: {{ .Values.persistence.storageClass | quote }}
+        resources:
+          requests:
+            storage: {{ .Values.persistence.worker.heapdump.size | quote }}
+    - metadata:
+        name: trino-worker-spill-volume
+      spec:
+        accessModes:
+          {{- range .Values.persistence.accessModes }}
+          - {{ . | quote }}
+          {{- end }}
+        storageClassName: {{ .Values.persistence.storageClass | quote }}
+        resources:
+          requests:
+            storage: {{ .Values.persistence.worker.spill.size | quote }}

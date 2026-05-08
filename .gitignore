@@ -53,3 +53,7 @@ kubeconfig.local
 *.sql.gz
 *.tar.gz
 backup/
+
+
+# Big binaries — trino server distributions (downloaded externally, version-bumped)
+sql_engines/mpp/trino/files/trino-server-*/

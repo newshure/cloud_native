@@ -1,0 +1,31 @@
+# Worker HorizontalPodAutoscaler.
+# - 정적 replicas (06_worker.yaml: spec.replicas) 와 함께 적용 시,
+#   HPA 가 부착되면 spec.replicas 는 HPA 가 동적으로 조정합니다.
+# - minReplicas/maxReplicas 는 운영 정책 (SLO/예산) 에 맞춰 조정.
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: trino-scaler
+  namespace: __NAMESPACE__
+  labels:
+    app: trino-worker
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: StatefulSet
+    name: trino-worker
+  minReplicas: 2
+  maxReplicas: 10
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 80
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 80

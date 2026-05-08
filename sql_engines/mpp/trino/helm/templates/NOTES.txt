@@ -1,0 +1,42 @@
+================================================================================
+trino {{ .Chart.AppVersion }} 가 namespace "{{ .Release.Namespace }}" 에 설치되었습니다.
+release: {{ .Release.Name }}
+================================================================================
+
+[1] Pod 상태 확인
+  kubectl -n {{ .Release.Namespace }} get pods -l 'app in ({{ .Values.componentNames.coordinatorName }},{{ .Values.componentNames.workerName }})' -o wide
+
+[2] Service / Ingress / HPA
+  kubectl -n {{ .Release.Namespace }} get svc,ingress,hpa -l app.kubernetes.io/instance={{ .Release.Name }}
+
+[3] Coordinator UI
+{{- if .Values.ingress.enabled }}
+  https://{{ .Values.ingress.host }}/ui/
+  (Ingress class: {{ .Values.ingress.className }}, TLS secret: {{ .Values.ingress.tls.secretName }})
+{{- else }}
+  Ingress 비활성화 — port-forward 로 접속:
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ .Values.componentNames.coordinatorService }} 8443:8443
+  → https://localhost:8443/ui/
+{{- end }}
+
+[4] CLI 접속 예 (coordinator pod 내부에서)
+  kubectl -n {{ .Release.Namespace }} exec -it deploy/{{ .Values.componentNames.coordinatorName }} -- \
+    /opt/trino/bin/trino-cli.sh --server https://localhost:8443 --user admin
+
+[5] Worker 스케일
+{{- if .Values.autoscaling.enabled }}
+  HPA 활성: min={{ .Values.autoscaling.minReplicas }}, max={{ .Values.autoscaling.maxReplicas }}
+  현재 replicas:
+    kubectl -n {{ .Release.Namespace }} get sts {{ .Values.componentNames.workerName }} -o jsonpath='{.status.replicas}'
+{{- else }}
+  HPA 비활성. 수동 scale:
+  kubectl -n {{ .Release.Namespace }} scale sts/{{ .Values.componentNames.workerName }} --replicas=N
+{{- end }}
+
+[!] 주의사항
+  - 본 chart 의 secrets/catalog 본문은 placeholder 입니다.
+    Sealed-Secrets / SOPS / External-Secrets-Operator / Vault 중 하나로 실값 주입 후
+    `helm upgrade` 또는 별도 apply 하십시오.
+  - Worker StatefulSet 의 PVC (data/heapdump/spill) 는 storageClass={{ .Values.persistence.storageClass }}
+    이며 chart uninstall 시 자동 삭제되지 않습니다. 필요 시 수동 정리:
+      kubectl -n {{ .Release.Namespace }} delete pvc -l app={{ .Values.componentNames.workerName }}
